@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "django_unused2"
-version = "0.2.3"
+version = "0.2.4"
 description = ""
 authors = ["Karel Hovorka <git@karel-hovorka.eu>"]
 readme = "README.md"
