@@ -2,14 +2,13 @@ from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.http import HttpRequest
 from django.test import TestCase
-from django.test import tag
 from django.urls import reverse
 
 User = get_user_model()
 
 
 class AdminPageTest(TestCase):
-    fixtures = []
+    fixtures: list[str] = []
 
     def setUp(self):
         self.admin_user = User.objects.create_superuser(

@@ -7,8 +7,9 @@ from django.template import Template as DjangoTemplate, Origin
 from django_unused2.check_template_util import (
     analyze_variables_in_includes,
     print_analysis_results,
+    TemplateIncludeInfo,
+    analyze_for_includes,
 )
-from django_unused2.dataclasses import Template
 from django_unused2.file_finder import find_app_templates
 
 
@@ -31,8 +32,7 @@ class Command(BaseCommand):
         check_include_params = options["check_include_params"]
 
         template_include_info_by_relative_path: Dict[str, TemplateIncludeInfo] = {}
-        for t in find_app_templates():
-            template: Template = t
+        for template in find_app_templates():
             if not template.local_app:
                 continue
             elif "site-packages" in template.absolute_path:
@@ -60,13 +60,15 @@ class Command(BaseCommand):
                     self.style.ERROR(f"An error occurred with template {path}:\n{e}\n")
                 )
         if check_include_params:
-            result = analyze_variables_in_includes(
+            analysis_result = analyze_variables_in_includes(
                 template_include_info_by_relative_path
             )
-            print_analysis_results(result)
-            if len(result) > 0:
+            print_analysis_results(analysis_result)
+            if len(analysis_result) > 0:
                 self.stdout.write(
-                    self.style.ERROR(f"{len(result)} include errors in templates.")
+                    self.style.ERROR(
+                        f"{len(analysis_result)} include errors in templates."
+                    )
                 )
         if error > 0:
             raise CommandError(
