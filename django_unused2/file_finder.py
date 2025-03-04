@@ -190,7 +190,7 @@ class StringLiteralVisitor(ast.NodeVisitor):
 
     def visit_Constant(self, node: ast.Constant) -> None:
         for suffix in self.suffixes:
-            if isinstance(node.value, str) and node.s.endswith(suffix):
+            if isinstance(node.value, str) and node.value.endswith(suffix):
                 self.found_strings.append(StringWithLine(node.value, node.lineno))
         self.generic_visit(node)
 
