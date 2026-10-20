@@ -3,20 +3,28 @@ import json
 from django_unused2.dataclasses import AnalysisResult
 
 
+def dot_quote(value: str) -> str:
+    return '"' + value.replace('"', '\\"') + '"'
+
+
 def generate_dot(analysis_result: AnalysisResult) -> str:
     lines = ["digraph G {"]
 
     # Add nodes for Python files and Templates
     for py in analysis_result.python_files:
-        lines.append(f'    "{py.id}" [label="{py.relative_path}", shape=box];')
+        lines.append(
+            f"    {dot_quote(py.id)} [label={dot_quote(py.relative_path)}, shape=box];"
+        )
     for tmpl in analysis_result.templates:
-        lines.append(f'    "{tmpl.id}" [label="{tmpl.relative_path}", shape=ellipse];')
+        lines.append(
+            f"    {dot_quote(tmpl.id)} [label={dot_quote(tmpl.relative_path)}, shape=ellipse];"
+        )
 
     # Add edges for references
     for ref in analysis_result.references:
         color = "red" if ref.broken else "black"
         lines.append(
-            f'    "{ref.source_id}" -> "{ref.target_id}" [label="{ref.reference_type.name}", color="{color}"];'
+            f'    {dot_quote(ref.source_id)} -> {dot_quote(ref.target_id)} [label="{ref.reference_type.name}", color="{color}"];'
         )
 
     lines.append("}")

@@ -60,7 +60,9 @@ def print_referenced_by(
     )
 
     def rel_path(template_reference: TemplateReference) -> str:
-        relative_path = templates_by_id[template_reference.source_id].relative_path
+        source = templates_by_id.get(template_reference.source_id)
+        # Sources that aren't templates are python files.
+        relative_path = source.relative_path if source else template_reference.source_id
         return f"{Fore.WHITE}{relative_path} ({reference_type_colors.get(template_reference.reference_type, Fore.WHITE)}{template_reference.reference_type.value}{Fore.WHITE} at {Fore.GREEN}{template_reference.line}{Fore.WHITE})"
 
     if len(reference_chains) > 0:

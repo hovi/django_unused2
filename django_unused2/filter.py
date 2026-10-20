@@ -91,23 +91,22 @@ def find_unreferenced_templates(
         py_file.id: py_file for py_file in python_files
     }
 
+    targets_by_source: Dict[str, List[str]] = {}
+    for ref in references:
+        if ref.target_id in template_dict:
+            targets_by_source.setdefault(ref.source_id, []).append(ref.target_id)
+
+    to_visit = [
+        ref.target_id
+        for ref in references
+        if ref.source_id in python_file_dict and ref.target_id in template_dict
+    ]
     visited_templates: Set[str] = set()
-
-    for ref in references:
-        if ref.source_id in python_file_dict and ref.target_id in template_dict:
-            visited_templates.add(ref.target_id)
-
-    for ref in references:
-        if ref.source_id in visited_templates and ref.target_id in template_dict:
-            visited_templates.add(ref.target_id)
-
-    for ref in references:
-        if ref.source_id in visited_templates and ref.target_id in template_dict:
-            visited_templates.add(ref.target_id)
-
-    for ref in references:
-        if ref.source_id in visited_templates and ref.target_id in template_dict:
-            visited_templates.add(ref.target_id)
+    while to_visit:
+        template_id = to_visit.pop()
+        if template_id not in visited_templates:
+            visited_templates.add(template_id)
+            to_visit.extend(targets_by_source.get(template_id, []))
 
     never_visited = [
         t for t in templates if t.id not in visited_templates and t.local_app
@@ -126,7 +125,8 @@ def find_broken_references(
 
 
 def run_analysis(config: TemplateFilterOptions) -> AnalysisResult:
-    templates = filter_templates(find_app_templates() + find_global_templates(), config)
+    # Same order as Django's template loaders: DIRS first, then app directories.
+    templates = filter_templates(find_global_templates() + find_app_templates(), config)
     python_files = filter_py_files(find_py_files(), config)
     references = find_all_references(templates, python_files)
     return analyze_references(references, templates, python_files)

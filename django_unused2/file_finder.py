@@ -1,6 +1,8 @@
 import ast
+import importlib.util
 import os
-from typing import List, Optional, Union, TypeVar, Type, Set
+from pathlib import Path
+from typing import Dict, List, Optional, Union, TypeVar, Type, Set
 
 from django.apps import AppConfig, apps
 from django.conf import settings
@@ -15,16 +17,24 @@ from django_unused2.dataclasses import (
 )
 from django_unused2.template_util import extract_template_references
 
+INSTALLED_PACKAGE_DIRS = {"site-packages", "dist-packages"}
+
+
+def is_local_path(path: Union[str, Path]) -> bool:
+    resolved = Path(path).resolve()
+    if INSTALLED_PACKAGE_DIRS.intersection(resolved.parts):
+        return False
+    return resolved.is_relative_to(Path(settings.BASE_DIR).resolve())
+
 
 def find_app_templates() -> List[Template]:
     templates: List[Template] = []
 
     for config in apps.get_app_configs():
-        local_app = str(config.path).find(str(settings.BASE_DIR)) > -1
         dir_path = os.path.join(str(config.path), "templates")
         templates.extend(
             find_templates_in_directory(
-                dir_path, app_config=config, local_app=local_app
+                dir_path, app_config=config, local_app=is_local_path(config.path)
             )
         )
     return templates
@@ -51,7 +61,7 @@ def find_in_directory(
                 relative_path = os.path.relpath(file_path, dir_path).replace("\\", "/")
                 found_items.append(
                     cls(
-                        id=file_path,
+                        id=os.path.join(dir_path, relative_path),
                         base_dir=dir_path,
                         relative_path=relative_path,
                         app_config=app_config,
@@ -83,49 +93,56 @@ def find_global_templates() -> List[Template]:
     if settings.TEMPLATES:
         for template_backend in settings.TEMPLATES:
             for directory in template_backend.get("DIRS", []):
-                local_app = directory.find(str(settings.BASE_DIR)) > -1
                 templates.extend(
-                    find_templates_in_directory(directory, local_app=local_app)
+                    find_templates_in_directory(
+                        str(directory), local_app=is_local_path(directory)
+                    )
                 )
 
     return templates
 
 
-def find_py_files(exclude_dirs: Optional[List[str]] = None) -> List[Python]:
-    exclude_dirs = exclude_dirs or [os.path.join("example", "server", "tests")]
-
-    python_extensions = ["py"]
+def find_py_files() -> List[Python]:
     result: List[Python] = []
 
     for config in apps.get_app_configs():
-        local_app = str(config.path).find(str(settings.BASE_DIR)) > -1
-        dir_path = str(config.path)
-        new_files = []
-        for root, dirs, files in os.walk(dir_path):
-            if any(exclude_dir in root for exclude_dir in exclude_dirs):
-                print(f"excluding: {root}")
-                continue
-            for file in files:
-                filename, extension = os.path.splitext(file)
-                if extension[1:] in python_extensions:
-                    absolute_path = os.path.join(root, file).replace("\\", "/")
-                    new_files.append(
-                        Python(
-                            id=absolute_path,
-                            base_dir=dir_path,
-                            relative_path=os.path.relpath(absolute_path, dir_path),
-                            app_config=config,
-                            local_app=local_app,
-                        )
-                    )
-            result.extend(new_files)
+        result.extend(
+            find_python_in_directory(
+                str(config.path),
+                local_app=is_local_path(config.path),
+                app_config=config,
+            )
+        )
+
+    # Project-level python files (urls.py, views.py) next to ROOT_URLCONF
+    # usually don't belong to any installed app.
+    root_urlconf = getattr(settings, "ROOT_URLCONF", None)
+    spec = importlib.util.find_spec(root_urlconf) if root_urlconf else None
+    if spec and spec.origin:
+        found_ids = {python_file.id for python_file in result}
+        dir_path = os.path.dirname(spec.origin)
+        result.extend(
+            python_file
+            for python_file in find_python_in_directory(
+                dir_path, local_app=is_local_path(dir_path)
+            )
+            if python_file.id not in found_ids
+        )
+
     return result
 
 
 def get_normalized_path(base_dir: str, path: str):
     if path.startswith("."):
-        return os.path.normpath(os.path.join(base_dir, path))
-    return os.path.normpath(path)
+        return os.path.normpath(os.path.join(base_dir, path)).replace("\\", "/")
+    return os.path.normpath(path).replace("\\", "/")
+
+
+def get_templates_by_relative_path(templates: List[Template]) -> Dict[str, Template]:
+    """
+    Like Django's template loaders, the first template with a given path wins.
+    """
+    return {template.relative_path: template for template in reversed(templates)}
 
 
 def find_template_to_template_references(
@@ -133,12 +150,10 @@ def find_template_to_template_references(
 ) -> List[TemplateReference]:
     results = []
 
-    templates_by_relative_path = {
-        template.relative_path: template for template in templates
-    }
+    templates_by_relative_path = get_templates_by_relative_path(templates)
 
     for template in templates:
-        with open(template.absolute_path, "r") as file:
+        with open(template.absolute_path, "r", encoding="utf-8") as file:
             contents = file.read()
 
         template_references: List[TemplateTokenReference] = extract_template_references(
@@ -182,20 +197,14 @@ class StringLiteralVisitor(ast.NodeVisitor):
         self.suffixes = suffixes or {".html", ".txt"}
         self.found_strings: List[StringWithLine] = []
 
-    def visit_Str(self, node: ast.Str) -> None:
-        for suffix in self.suffixes:
-            if node.s.endswith(suffix):
-                self.found_strings.append(StringWithLine(node.s, node.lineno))
-        self.generic_visit(node)
-
     def visit_Constant(self, node: ast.Constant) -> None:
         for suffix in self.suffixes:
-            if isinstance(node.value, str) and node.s.endswith(suffix):
+            if isinstance(node.value, str) and node.value.endswith(suffix):
                 self.found_strings.append(StringWithLine(node.value, node.lineno))
         self.generic_visit(node)
 
 
-def extract_string_literals(source_code: str) -> List[StringWithLine]:
+def extract_string_literals(source_code: Union[str, bytes]) -> List[StringWithLine]:
     tree = ast.parse(source_code)
     visitor = StringLiteralVisitor()
     visitor.visit(tree)
@@ -207,22 +216,29 @@ def find_python_to_template_references(
 ) -> List[TemplateReference]:
     used_templates = []
 
+    templates_by_relative_path = get_templates_by_relative_path(templates)
+
     for python_file in python_files:
-        with open(python_file.absolute_path, "r") as file:
+        # Read bytes so ast.parse honours the file's encoding declaration.
+        with open(python_file.absolute_path, "rb") as file:
             source = file.read()
 
-        string_references = extract_string_literals(source_code=source)
-        for template in templates:
-            for string_reference in string_references:
-                if string_reference.value == template.relative_path:
-                    used_templates.append(
-                        TemplateReference(
-                            line=string_reference.line,
-                            source_id=python_file.absolute_path,
-                            target_id=template.absolute_path,
-                            reference_type=ReferenceType.render,
-                        )
+        try:
+            string_references = extract_string_literals(source_code=source)
+        except (SyntaxError, ValueError):
+            continue
+
+        for string_reference in string_references:
+            template = templates_by_relative_path.get(string_reference.value)
+            if template:
+                used_templates.append(
+                    TemplateReference(
+                        line=string_reference.line,
+                        source_id=python_file.id,
+                        target_id=template.id,
+                        reference_type=ReferenceType.render,
                     )
+                )
 
     return used_templates
 
